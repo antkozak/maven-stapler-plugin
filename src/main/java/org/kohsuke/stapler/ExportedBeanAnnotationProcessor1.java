@@ -22,7 +22,6 @@
  */
 package org.kohsuke.stapler;
 
-import com.sun.mirror.apt.AnnotationProcessor;
 import com.sun.mirror.apt.AnnotationProcessorEnvironment;
 import com.sun.mirror.apt.Filer.Location;
 import com.sun.mirror.declaration.AnnotationTypeDeclaration;
@@ -32,9 +31,6 @@ import com.sun.mirror.declaration.MemberDeclaration;
 import com.sun.mirror.declaration.MethodDeclaration;
 import com.sun.mirror.declaration.TypeDeclaration;
 import com.sun.mirror.util.SimpleDeclarationVisitor;
-import org.kohsuke.stapler.export.Exported;
-import org.kohsuke.stapler.export.ExportedBean;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -52,16 +48,18 @@ import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
+import org.kohsuke.stapler.export.Exported;
+import org.kohsuke.stapler.export.ExportedBean;
 
 /**
  * Handles {@link ExportedBean} and {@link Exported} annotations.
  * 
  * @author Kohsuke Kawaguchi
  */
-public class ExportedBeanAnnotationProcessor implements AnnotationProcessor {
+public class ExportedBeanAnnotationProcessor1 /*implements AnnotationProcessor*/ {
     private final AnnotationProcessorEnvironment env;
 
-    public ExportedBeanAnnotationProcessor(AnnotationProcessorEnvironment env) {
+    public ExportedBeanAnnotationProcessor1(AnnotationProcessorEnvironment env) {
         this.env = env;
     }
 

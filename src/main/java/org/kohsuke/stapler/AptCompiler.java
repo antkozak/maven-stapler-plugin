@@ -22,25 +22,27 @@
  */
 package org.kohsuke.stapler;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import javax.annotation.processing.AbstractProcessor;
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
 import org.codehaus.plexus.compiler.CompilerConfiguration;
 import org.codehaus.plexus.compiler.CompilerException;
-import org.codehaus.plexus.compiler.CompilerError;
 import org.codehaus.plexus.compiler.javac.JavacCompiler;
-import org.codehaus.plexus.util.StringUtils;
-import org.codehaus.plexus.util.cli.Commandline;
-import org.codehaus.plexus.util.cli.CommandLineUtils;
-import org.codehaus.plexus.util.cli.CommandLineException;
-
-import java.io.File;
-import java.io.PrintWriter;
-import java.io.IOException;
-import java.io.BufferedReader;
-import java.io.StringReader;
-import java.io.FileWriter;
-import java.util.Collections;
-import java.util.List;
-import java.net.URL;
-import java.net.MalformedURLException;
+import org.kohsuke.stapler.processor.ExportedBeanAnnotationProcessor;
 
 /**
  * {@link Compiler} for APT.
@@ -76,64 +78,157 @@ public class AptCompiler extends JavacCompiler {
                           "source file" + ( sourceFiles.length == 1 ? "" : "s" ) +
                           " to " + destinationDir.getAbsolutePath() );
 
-        if (config.isFork()) {
-            // forking a compiler requires classpath set up and passing AnnotationProcessorFactory.
-            config.addClasspathEntry(whichJar(AnnotationProcessorFactoryImpl.class));
-            config.addCompilerCustomArgument("-factory",AnnotationProcessorFactoryImpl.class.getName());
-        }
+//        if (config.isFork()) {
+//            // forking a compiler requires classpath set up and passing AnnotationProcessorFactory.
+//            config.addClasspathEntry(whichJar(AnnotationProcessorFactoryImpl.class));
+//            config.addCompilerCustomArgument("-factory",AnnotationProcessorFactoryImpl.class.getName());
+//        }
 
         // this is where the META-INF/services get generated.
         config.addCompilerCustomArgument("-s",new File(config.getOutputLocation()).getAbsolutePath());
-        String[] args = buildCompilerArguments( config, sourceFiles );
+//        String[] args = buildCompilerArguments( config, sourceFiles );
+        List<String> options = buildCompilerOptions(config, sourceFiles);
 
-        if (config.isFork()) {
-            String executable = config.getExecutable();
-            if (StringUtils.isEmpty(executable)) {
-                File apt = new File(new File(System.getProperty("java.home")),"bin/apt"); // Mac puts $JAVA_HOME to JDK
-                if (!apt.exists())
-                    // on other platforms $JAVA_HOME is JRE in JDK.
-                    apt = new File(new File(System.getProperty("java.home")),"../bin/apt");
-                executable = apt.getAbsolutePath();
-            }
-            return compileOutOfProcess(config, executable, args);
-        } else {
-            return compileInProcess(args);
-        }
+//        if (config.isFork()) {
+//            String executable = config.getExecutable();
+//            if (StringUtils.isEmpty(executable)) {
+//                File apt = new File(new File(System.getProperty("java.home")),"bin/apt"); // Mac puts $JAVA_HOME to JDK
+//                if (!apt.exists())
+//                    // on other platforms $JAVA_HOME is JRE in JDK.
+//                    apt = new File(new File(System.getProperty("java.home")),"../bin/apt");
+//                executable = apt.getAbsolutePath();
+//            }
+//            return compileOutOfProcess(config, executable, args);
+//        } else {
+
+            return compileInProcess(options, Arrays.asList(sourceFiles), destinationDir.getAbsolutePath());
+//        }
     }
 
-    private String whichJar(Class c) throws CompilerException {
-        try {
-            String url = c.getClassLoader().getResource(c.getName().replace('.', '/') + ".class").toExternalForm();
-            if (url.startsWith("jar:")) {
-                url = url.substring(4);
-                url = url.substring(0,url.indexOf('!'));
-                return new URL(url).getPath();
-            }
-            throw new CompilerException("Failed to infer classpath for "+c);
-        } catch (MalformedURLException e) {
-            throw new CompilerException("Failed to infer classpath for "+c,e);
+    private static List<String> buildCompilerOptions(CompilerConfiguration config, String[] sourceFiles) {
+        List<String> args = new ArrayList<String>();
+        File destinationDir = new File(config.getOutputLocation());
+        args.add("-d");
+        args.add(destinationDir.getAbsolutePath());
+
+        List classpathEntries = config.getClasspathEntries();
+        if (classpathEntries != null && !classpathEntries.isEmpty()) {
+            args.add("-classpath");
+            args.add(getPathString(classpathEntries));
         }
+
+        List sourceLocations = config.getSourceLocations();
+        if (sourceLocations != null && !sourceLocations.isEmpty() && (sourceFiles.length == 0)) {
+            args.add("-sourcepath");
+            args.add(getPathString(sourceLocations));
+        }
+
+        if (config.isOptimize()) {
+            args.add("-O");
+        }
+
+        if (config.isDebug()) {
+            args.add("-g");
+        }
+
+        if (config.isVerbose()) {
+            args.add("-verbose");
+        }
+
+        if (config.isShowDeprecation()) {
+            args.add("-deprecation");
+            // This is required to actually display the deprecation messages
+            config.setShowWarnings(true);
+        }
+
+        if (!config.isShowWarnings()) {
+            args.add("-nowarn");
+        }
+
+        args.add("-target");
+        args.add(org.codehaus.plexus.util.StringUtils.isEmpty(config.getTargetVersion()) ? "1.5"
+            : config.getTargetVersion());
+
+        args.add("-source");
+        args.add(org.codehaus.plexus.util.StringUtils.isEmpty(config.getSourceVersion()) ? "1.5"
+            : config.getSourceVersion());
+
+        for (Iterator it = config.getCustomCompilerArguments().entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry entry = (Map.Entry) it.next();
+            String key = (String) entry.getKey();
+            if (org.codehaus.plexus.util.StringUtils.isEmpty(key)) {
+                continue;
+            }
+            args.add(key);
+            String value = (String) entry.getValue();
+            if (org.codehaus.plexus.util.StringUtils.isEmpty(value)) {
+                continue;
+            }
+            args.add(value);
+        }
+        return args;
     }
+
+
+//    private String whichJar(Class c) throws CompilerException {
+//        try {
+//            String url = c.getClassLoader().getResource(c.getName().replace('.', '/') + ".class").toExternalForm();
+//            if (url.startsWith("jar:")) {
+//                url = url.substring(4);
+//                url = url.substring(0,url.indexOf('!'));
+//                return new URL(url).getPath();
+//            }
+//            throw new CompilerException("Failed to infer classpath for "+c);
+//        } catch (MalformedURLException e) {
+//            throw new CompilerException("Failed to infer classpath for "+c,e);
+//        }
+//    }
 
     /**
      * Compile the java sources in the current JVM, without calling an external executable,
      * using <code>com.sun.tools.javac.Main</code> class
      *
-     * @param args arguments for the compiler as they would be used in the command line javac
+     * @param options arguments for the compiler as they would be used in the command line javac
      * @return List of CompilerError objects with the errors encountered.
      * @throws CompilerException
      */
-    protected List compileInProcess( String[] args ) throws CompilerException {
-        com.sun.tools.apt.Main aptTool = new com.sun.tools.apt.Main();
-        int r = aptTool.process(new AnnotationProcessorFactoryImpl(),
-            new PrintWriter(System.out,true),args);
-        if(r!=0)
-            throw new CompilerException("APT failed: "+r);
-
-        // TODO: should I try to parse the output?
-        return Collections.emptyList();
+    protected List compileInProcess(List<String> options, List<String> sourceFiles, String destinationAbsolutePath)
+        throws CompilerException {
+//        com.sun.tools.apt.Main aptTool = new com.sun.tools.apt.Main();
+//        int r = aptTool.process(new AnnotationProcessorFactoryImpl(),
+//            new PrintWriter(System.out,true),args);
+        List<String> compilationErrors = new ArrayList<String>();
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<JavaFileObject>();
+        StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null);
+        Iterable<? extends JavaFileObject> compilationUnits = fileManager.
+            getJavaFileObjectsFromStrings(sourceFiles);
+        JavaCompiler.CompilationTask task = compiler.getTask(new PrintWriter(System.out, true), fileManager, null,
+            options, null, compilationUnits);
+        LinkedList<AbstractProcessor> processors = new LinkedList<AbstractProcessor>();
+        ExportedBeanAnnotationProcessor processor = new ExportedBeanAnnotationProcessor();
+        processor.setDestinationPath(destinationAbsolutePath);
+        processors.add(processor);
+        task.setProcessors(processors);
+        Boolean success = task.call();
+        for (Diagnostic diagnostic : diagnostics.getDiagnostics()) {
+            String error = String.format("Error in source %s on line %d position %d kind %s message %s",
+                diagnostic.getSource(), diagnostic.getLineNumber(), diagnostic.getPosition(), diagnostic.getKind(),
+                diagnostic.getMessage(null));
+            System.out.println(error);
+            compilationErrors.add(error);
+        }
+        try {
+            fileManager.close();
+        } catch (IOException ignore) {
+        }
+        if (!success) {
+            throw new CompilerException("APT failed");
+        }
+        return compilationErrors;
     }
 
+/*
     protected List compileOutOfProcess(CompilerConfiguration config, String executable, String[] args)
             throws CompilerException {
         Commandline cli = new Commandline();
@@ -190,32 +285,33 @@ public class AptCompiler extends JavacCompiler {
 
         return messages;
     }
+*/
 
-    private File createFileWithArguments(String[] args) throws IOException {
-        PrintWriter writer = null;
-        try {
-            File tempFile = File.createTempFile(JavacCompiler.class.getName(), "arguments");
-            tempFile.deleteOnExit();
-
-            writer = new PrintWriter(new FileWriter(tempFile));
-
-            for (int i = 0; i < args.length; i++) {
-                String argValue = args[i].replace(File.separatorChar, '/');
-
-                writer.write("\"" + argValue + "\"");
-
-                writer.write(EOL);
-            }
-
-            writer.flush();
-
-            return tempFile;
-
-        }
-        finally {
-            if (writer != null) {
-                writer.close();
-            }
-        }
-    }
+//    private File createFileWithArguments(String[] args) throws IOException {
+//        PrintWriter writer = null;
+//        try {
+//            File tempFile = File.createTempFile(JavacCompiler.class.getName(), "arguments");
+//            tempFile.deleteOnExit();
+//
+//            writer = new PrintWriter(new FileWriter(tempFile));
+//
+//            for (int i = 0; i < args.length; i++) {
+//                String argValue = args[i].replace(File.separatorChar, '/');
+//
+//                writer.write("\"" + argValue + "\"");
+//
+//                writer.write(EOL);
+//            }
+//
+//            writer.flush();
+//
+//            return tempFile;
+//
+//        }
+//        finally {
+//            if (writer != null) {
+//                writer.close();
+//            }
+//        }
+//    }
 }
